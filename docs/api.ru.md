@@ -171,6 +171,8 @@ frame = renderer.frame(120)     # массив numpy uint8, форма (H, W, 3)
 Тонкая обёртка над процессом ffmpeg, который читает сырые RGB-кадры из stdin
 и склеивает их с готовым аудиофайлом. Работает как контекстный менеджер:
 корректно закрывает кодировщик при успехе и прерывает при исключении.
+Для NVENC задайте `cfg.video.encoder = "h264_nvenc"`; целевое качество
+`cfg.video.cq` по умолчанию равно `22`.
 
 ```python
 from musicvideo.ffmpeg import VideoEncoder
@@ -234,10 +236,10 @@ cfg = load_config(None, deep_merge(MY_LOOK, {"audio_file": "track.mp3"}))
 
 ## `musicvideo.layers`
 
-Пять классов-слоёв — `Background`, `Cover`, `Visualizer`, `TextLayer`,
-`ProgressBar` и `Overlay` — каждый принимает свою секцию конфига и размер
-кадра и рисует в холст PIL. `FrameRenderer` показывает, как они складываются
-вместе; в своём конвейере их можно использовать поодиночке.
+Семь классов-слоёв — `Background`, `Cover`, `Visualizer`, `TextLayer`,
+`ProgressBar`, `Overlay` и `ImageOverlay` — принимают свои секции конфига и
+размер кадра и рисуют на холсте PIL. `FrameRenderer` показывает, как они
+складываются вместе; в своём конвейере их можно использовать поодиночке.
 
 `collect_images(spec)` из `musicvideo.layers.background` разворачивает путь,
 папку или список в отсортированный список файлов изображений и бросает

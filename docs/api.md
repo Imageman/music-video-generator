@@ -168,6 +168,8 @@ feeding frames somewhere other than the built-in encoder.
 A thin wrapper over an ffmpeg process reading raw RGB frames on stdin and
 muxing them with a prepared audio file. Usable as a context manager, which
 closes the encoder cleanly on success and aborts it on an exception:
+Set `cfg.video.encoder = "h264_nvenc"` to use NVIDIA encoding; its default
+quality target `cfg.video.cq` is `22`.
 
 ```python
 from musicvideo.ffmpeg import VideoEncoder
@@ -231,10 +233,10 @@ cfg = load_config(None, deep_merge(MY_LOOK, {"audio_file": "track.mp3"}))
 
 ## `musicvideo.layers`
 
-The five layer classes — `Background`, `Cover`, `Visualizer`, `TextLayer`,
-`ProgressBar` and `Overlay` — each take their config section, the frame size,
-and render into a PIL canvas. `FrameRenderer` is the example of how they fit
-together; a custom pipeline can use them individually.
+The seven layer classes — `Background`, `Cover`, `Visualizer`, `TextLayer`,
+`ProgressBar`, `Overlay` and `ImageOverlay` — each take their config section
+and the frame size, and render into a PIL canvas. `FrameRenderer` is the
+example of how they fit together; a custom pipeline can use them individually.
 
 `collect_images(spec)` from `musicvideo.layers.background` expands a path, a
 folder or a list into a sorted list of image files, raising `FileNotFoundError`

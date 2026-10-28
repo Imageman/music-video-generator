@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from tqdm import tqdm
+
 from .config import Config, ConfigError, load_config
 from .i18n import LANGUAGES, set_language, tr
 from .presets import PRESETS, describe
@@ -104,7 +106,7 @@ def _add_lang_arg(p: argparse.ArgumentParser) -> None:
 
 
 def _add_render_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("audio", nargs="?", help=tr("cli.arg.audio"))
+    p.add_argument("audio", nargs="*", help=tr("cli.arg.audio"))
     p.add_argument("-i", "--image", action="append", default=None,
                    metavar="PATH", help=tr("cli.arg.image"))
     p.add_argument("-o", "--output", default=None, help=tr("cli.arg.output"))
@@ -117,6 +119,21 @@ def _add_render_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--artist", default=None, help=tr("cli.arg.artist"))
     p.add_argument("--cover", default=None, help=tr("cli.arg.cover"))
     p.add_argument("--no-cover", action="store_true", help=tr("cli.arg.no_cover"))
+    p.add_argument("--overlay-image", default=None, help=tr("cli.arg.overlay_image"))
+    p.add_argument("--overlay-width", type=float, default=None, metavar="0..1",
+                   help=tr("cli.arg.overlay_width"))
+    p.add_argument("--overlay-position", type=float, nargs=2, default=None,
+                   metavar=("X", "Y"), help=tr("cli.arg.overlay_position"))
+    p.add_argument("--overlay-opacity", type=float, default=None, metavar="0..1",
+                   help=tr("cli.arg.overlay_opacity"))
+    p.add_argument("--overlay-intro", type=float, default=None, metavar="SEC",
+                   help=tr("cli.arg.overlay_intro"))
+    p.add_argument("--overlay-outro", type=float, default=None, metavar="SEC",
+                   help=tr("cli.arg.overlay_outro"))
+    p.add_argument("--overlay-fade-in", type=float, default=None, metavar="SEC",
+                   help=tr("cli.arg.overlay_fade_in"))
+    p.add_argument("--overlay-fade-out", type=float, default=None, metavar="SEC",
+                   help=tr("cli.arg.overlay_fade_out"))
 
     p.add_argument("--style", default=None,
                    choices=["circle", "bars", "mirror", "wave", "ring", "dots"],
@@ -138,13 +155,28 @@ def _add_render_args(p: argparse.ArgumentParser) -> None:
                    help=tr("cli.arg.bass"))
     p.add_argument("--start", type=float, default=None, help=tr("cli.arg.start"))
     p.add_argument("--length", type=float, default=None, help=tr("cli.arg.length"))
+    p.add_argument("--track-gap", type=float, default=None, metavar="СЕК",
+                   help=tr("cli.arg.track_gap"))
 
     p.add_argument("--size", default=None, metavar="WxH", help=tr("cli.arg.size"))
     p.add_argument("--fps", type=int, default=None, help=tr("cli.arg.fps"))
+    p.add_argument("--encoder", default=None,
+                   choices=["libx264", "h264_nvenc"], help=tr("cli.arg.encoder"))
     p.add_argument("--crf", type=int, default=None, help=tr("cli.arg.crf"))
+    p.add_argument("--cq", type=int, default=None, metavar="1..51",
+                   help=tr("cli.arg.cq"))
+    p.add_argument("--nvenc-preset", default=None,
+                   choices=[f"p{i}" for i in range(1, 8)],
+                   help=tr("cli.arg.nvenc_preset"))
+    p.add_argument("--audio-bitrate", default=None, metavar="RATE",
+                   help=tr("cli.arg.audio_bitrate"))
     p.add_argument("--preview", type=float, default=None, metavar="SEC",
                    help=tr("cli.arg.preview"))
     p.add_argument("--workers", type=int, default=None, help=tr("cli.arg.workers"))
+    p.add_argument("--renderer", choices=["cpu", "gpu", "auto"], default=None,
+                   help=tr("cli.arg.renderer"))
+    p.add_argument("--gpu-effects", default=None, metavar="LIST",
+                   help=tr("cli.arg.gpu_effects"))
     p.add_argument("--quiet", action="store_true", help=tr("cli.arg.quiet"))
 
 
@@ -177,7 +209,8 @@ def _set(target: dict, path: str, value: Any) -> None:
 
 def overrides_from_args(args: argparse.Namespace) -> dict:
     o: dict[str, Any] = {}
-    _set(o, "audio_file", args.audio)
+    if args.audio:
+        _set(o, "audio_file", args.audio[0] if len(args.audio) == 1 else args.audio)
     _set(o, "output", args.output)
     _set(o, "preview", args.preview)
     _set(o, "workers", args.workers)
@@ -189,6 +222,20 @@ def overrides_from_args(args: argparse.Namespace) -> dict:
     _set(o, "text.title.text", args.title)
     _set(o, "text.artist.text", args.artist)
     _set(o, "cover.image", args.cover)
+    _set(o, "overlay.image", args.overlay_image)
+    _set(o, "overlay.image_width", args.overlay_width)
+    _set(o, "overlay.image_position", args.overlay_position)
+    _set(o, "overlay.image_opacity", args.overlay_opacity)
+    _set(o, "overlay.image_intro_duration", args.overlay_intro)
+    _set(o, "overlay.image_outro_duration", args.overlay_outro)
+    _set(o, "overlay.image_fade_in", args.overlay_fade_in)
+    _set(o, "overlay.image_fade_out", args.overlay_fade_out)
+    _set(o, "renderer", args.renderer)
+    if args.gpu_effects is not None:
+        effects = [] if args.gpu_effects.strip().lower() in ("", "none", "off") else [
+            item.strip() for item in args.gpu_effects.split(",") if item.strip()
+        ]
+        _set(o, "gpu.effects", effects)
     if args.no_cover:
         _set(o, "cover.enabled", False)
 
@@ -205,9 +252,14 @@ def overrides_from_args(args: argparse.Namespace) -> dict:
     _set(o, "audio.bass_boost", args.bass)
     _set(o, "audio.start", args.start)
     _set(o, "audio.duration", args.length)
+    _set(o, "audio.track_gap", args.track_gap)
 
     _set(o, "video.fps", args.fps)
+    _set(o, "video.encoder", args.encoder)
     _set(o, "video.crf", args.crf)
+    _set(o, "video.cq", args.cq)
+    _set(o, "video.nvenc_preset", args.nvenc_preset)
+    _set(o, "video.audio_bitrate", args.audio_bitrate)
     if args.size:
         try:
             w, h = (int(v) for v in args.size.lower().replace("х", "x").split("x"))
@@ -223,12 +275,13 @@ def _fill_metadata(cfg: Config) -> None:
     if cfg.text.title.text and cfg.text.artist.text:
         return
     from . import ffmpeg
+    audio = cfg.audio_file[0] if isinstance(cfg.audio_file, list) else cfg.audio_file
     try:
-        info = ffmpeg.probe(cfg.audio_file)
+        info = ffmpeg.probe(audio)
     except Exception:
         return
     if not cfg.text.title.text:
-        cfg.text.title.text = info.title or Path(cfg.audio_file).stem
+        cfg.text.title.text = info.title or Path(audio).stem
     if not cfg.text.artist.text and info.artist:
         cfg.text.artist.text = info.artist
 
@@ -237,34 +290,24 @@ def _fill_metadata(cfg: Config) -> None:
 #  Прогресс
 # --------------------------------------------------------------------------- #
 class Progress:
-    """Однострочный индикатор с ETA."""
+    """ASCII-индикатор рендера с редким обновлением и ETA."""
 
-    def __init__(self, enabled: bool = True, width: int = 28) -> None:
+    def __init__(self, enabled: bool = True) -> None:
         self.enabled = enabled and sys.stderr.isatty()
-        self.width = width
-        self._last = 0.0
+        self._bar = None
 
     def __call__(self, done: int, total: int, elapsed: float) -> None:
         if not self.enabled:
             return
-        now = time.monotonic()
-        if done < total and now - self._last < 0.1:
-            return
-        self._last = now
-
-        ratio = done / max(total, 1)
-        filled = int(self.width * ratio)
-        fps = done / elapsed if elapsed > 0 else 0.0
-        eta = (total - done) / fps if fps > 0 else 0.0
-        bar = "█" * filled + "░" * (self.width - filled)
-        sys.stderr.write(
-            f"\r  {bar} {ratio * 100:5.1f}%  {done}/{total}  "
-            f"{fps:5.1f} {tr('cli.progress.unit')}  "
-            f"{tr('cli.progress.eta')} {_fmt(eta)}   "
-        )
-        sys.stderr.flush()
+        if self._bar is None:
+            self._bar = tqdm(
+                total=total, desc=tr("progress.video_frames"), unit="frame",
+                ascii=True, mininterval=2.0, dynamic_ncols=True, file=sys.stderr,
+            )
+        if done > self._bar.n:
+            self._bar.update(done - self._bar.n)
         if done >= total:
-            sys.stderr.write("\n")
+            self._bar.close()
 
 
 def _fmt(seconds: float) -> str:
@@ -322,7 +365,8 @@ def main(argv: list[str] | None = None) -> int:
         if command == "still":
             at = args.at
             if at is None:
-                at = ffmpeg.probe(cfg.audio_file).duration * 0.25
+                sources = cfg.audio_file if isinstance(cfg.audio_file, list) else [cfg.audio_file]
+                at = ffmpeg.expected_audio_duration(sources, cfg.audio) * 0.25
             image = render_still(cfg, at)
             out = Path(cfg.output)
             if out.suffix.lower() not in (".png", ".jpg", ".jpeg"):

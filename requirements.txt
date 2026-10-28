@@ -1,2 +1,6 @@
 numpy>=1.24
+numba>=0.68,<0.69
 pillow>=10.0
+moderngl>=5.10
+glcontext>=3.0
+tqdm>=4.66,<5

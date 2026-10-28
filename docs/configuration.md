@@ -61,11 +61,84 @@ wins.
 
 | Field | Type | Default | Meaning |
 |-------|------|---------|---------|
-| `audio_file` | string | `""` | The source track. The positional CLI argument sets this. |
+| `audio_file` | string or list of strings | `""` | One source track or an ordered list. The CLI accepts multiple positional files. |
 | `output` | string | `"output/video.mp4"` | Where the result goes. Parent folders are created. |
 | `preset` | string \| null | `null` | Preset to build on. |
 | `preview` | number \| null | `null` | Render only the first N seconds. |
 | `workers` | int | `0` | Render processes; `0` means auto (cores − 1, and at least ~40 frames each). |
+| `renderer` | string | `"auto"` | `gpu` uses ModernGL/GLSL, `cpu` uses the Pillow backend, `auto` tries GPU and falls back if OpenGL is unavailable. |
+| `gpu.texture_cache_mb` | int | `768` | Cache limit for background photo textures. The active crossfade pair can temporarily exceed it. |
+| `gpu.effects` | list of strings | `wave`, `glow`, `color_shift`, `grain`, `vignette`, `audio_light` | Supported effects: `wave`, `glow`, `color_shift`, `grain`, `vignette`, `scanlines`, `ripple`, `kaleidoscope`, `glitch`, `audio_light`, `frequency_neon`. |
+| `gpu.wave_strength`, `ripple_strength`, `glow_strength` | float | `0.004`, `0.006`, `0.22` | Wave/ripple distortion and soft glow strength. |
+| `gpu.color_shift_strength`, `audio_light_strength`, `contrast` | float | `0.12`, `1.0`, `1.0` | Music-reactive color/light strength and GPU contrast. |
+| `gpu.neon_*_gate` | float, 0–1 | `0.20` per band | Lower bound for the adaptive response threshold. A peak can leave a decaying tail. |
+| `gpu.neon_*_threshold` | float, 0–1 | `1.0` per band | Maximum coverage of the channel's exclusive heat-map region. |
+| `gpu.neon_*_expansion` | float, 0–1 | `1.0` per band | Power curve for how quickly coverage grows above the gate. |
+| `gpu.neon_gate_softness`, `neon_threshold_softness` | float | `0.03`, `0.035` | Smoothness above the adaptive audio threshold and at heat-map edges. |
+| `gpu.neon_release_half_life` | seconds | `0.10` | Glow-area release: after a peak, coverage halves every 0.1 s. |
+| `gpu.neon_adaptation_margin`, `neon_adaptation_range` | float, 0–1 | `0.02`, `0.15` | Shared fallback margin/range when the corresponding channel override is `null`. |
+| `gpu.neon_saturation_attack`, `neon_saturation_release` | seconds | `0.75`, `1.50` | Shared background rise/fall time constants for channel overrides set to `null`. |
+| `gpu.neon_*_adaptation_margin` | float or null | `0.024`, `0.009`, `0.026` | Margins above background for bass, mid and high bands. |
+| `gpu.neon_*_adaptation_range` | float or null | `0.05` each | Excess above threshold required for a full accent response. |
+| `gpu.neon_*_saturation_attack` | seconds or null | `0.5`, `1.5`, `1.5` | Background rise time constants for bass, mid and high bands. |
+| `gpu.neon_*_saturation_release` | seconds or null | `3.0` each | Background fall time constant. |
+| `gpu.neon_steady_strength`, `neon_steady_power` | float | `0.35`, `2.0` | Settled coverage of a sustained maximum and the power curve for steady sound. |
+| `gpu.neon_steady_dip_width` | float > 0 | `0.02` | Drop below background that fully suppresses steady coverage during a musical valley. |
+| `gpu.neon_loudness_floor_db`, `neon_loudness_full_db` | RMS-analysis dB | `-42.0`, `-20.0` | Overall loudness coefficient's floor and full-response reference. |
+| `gpu.neon_loudness_gamma` | float > 0 | `1.5` | Power curve for the overall loudness coefficient. |
+| `gpu.neon_heat_blur_radius` | float | `2` | Blur radius in frame pixels for float32 heat maps before normalization and equalization. |
+| `gpu.neon_blur_radius`, `neon_strength` | float | `0.1`, `1.35` | Halo radius as a fraction of the frame's shorter side and its brightness. Values above `1` remain supported as legacy pixel radii. The threshold/glow pass runs at quarter resolution. |
+
+`requirements.txt` installs ModernGL and glcontext. The GPU backend keeps one
+OpenGL context, renders frames sequentially and streams RGB through FFmpeg
+stdin. With explicit `renderer: "gpu"`, a missing OpenGL context is an error;
+`auto` logs when it falls back to CPU. Pillow prepares source photos and layer
+textures once, NumPy keeps the audio analysis, and GLSL handles per-frame
+effects and composition. Frames are read from GPU to RAM before encoding;
+zero-copy is not implemented.
+
+Set the effect list in `gpu.effects` or pass `--gpu-effects wave,glow`;
+`--gpu-effects none` disables them. These effects are used only by the GPU
+renderer.
+
+`frequency_neon` builds three float32 heat maps on the GPU: dark/blue bass,
+midtone and warm-color mid, and bright highs. It blurs the raw maps first
+(`neon_heat_blur_radius`, 2 px by default), then calculates image-specific
+threshold offsets to balance the regions. Each pixel is assigned only to the
+band with the strongest adjusted score, so the maps do not overlap and each
+covers about one third of the frame. Intensity is then normalized and
+histogram-equalized separately inside each assigned region: zero remains for
+pixels outside it, while active values span 1–255. Each band independently
+tracks an adapting background. The accent threshold is `max(gate, background +
+channel_margin)`. The background rises with 0.5 / 1.5 / 1.5 s time constants
+for bass / mid / high and falls with a 3 s time constant. Excess above the threshold
+controls accents. Strong steady sound also retains a floor:
+`steady = 0.35 * relative_level^2 * dip_gate`, where
+`relative_level = clip((signal - gate) / (1 - gate), 0, 1)`. On stable sound,
+`dip_gate=1`; a drop of 0.02 below background smoothly closes it to zero.
+Strong steady sound therefore retains coverage, while valleys between accents
+can dim the mask. A sustained maximum retains 35% coverage; a band at 0.8
+retains about 20%, provided the overall audio is loud enough.
+
+The processed track's RMS envelope supplies a shared loudness coefficient:
+`L = clip((rms_db + 42) / 22, 0, 1)^1.5`. This uses the internal FFT-analysis dB
+scale, not LUFS or sound pressure. It scales both steady coverage and accents,
+so normalization of a frequency channel cannot make a quiet passage flash at
+full area. A strong accent in loud music can open almost the entire region.
+The same coefficients are used for every track; there is no song-specific quota
+calibration. This is a perceptual-inspired visual heuristic, not a physiological
+hearing model.
+`threshold` caps coverage and `expansion` controls its power curve. Coverage
+attacks immediately and decays by half every 0.10 s after a peak. Release tails
+below 0.005 are set to zero. Full coverage means the band's exclusive image
+region, and the heat cutoff is `1 - coverage`. Scalar controls are prepared
+once in NumPy; image thresholding, blur, and Screen composition stay on GPU.
+A separate post-threshold blur
+creates the neon halo. The maps use the
+background before `audio_light`; when `frequency_neon` is active, `audio_light`
+is omitted from the background pass. Bass blends blue with Screen, mid
+frequencies blend red-to-green with Screen, and high frequencies blend
+yellow-to-near-white with Screen.
 
 ## `video`
 
@@ -74,10 +147,23 @@ wins.
 | `width` | int | `1920` | Frame width. Must be even. |
 | `height` | int | `1080` | Frame height. Must be even. |
 | `fps` | int | `30` | Frames per second. |
+| `encoder` | string | `"libx264"` | `libx264` for CPU or `h264_nvenc` for an NVIDIA GPU. |
 | `crf` | int | `21` | x264 quality, 0–51; lower is better and bigger. |
+| `cq` | int | `22` | NVENC constant-quality target, 1–51; only used with `h264_nvenc`. |
 | `preset` | string | `"medium"` | x264 speed preset: `ultrafast` … `veryslow`. |
+| `nvenc_preset` | string | `"p5"` | NVENC preset from `p1` (faster) to `p7` (higher quality). |
 | `pixel_format` | string | `"yuv420p"` | Output pixel format. `yuv420p` is what players and platforms expect. |
 | `audio_bitrate` | string | `"320k"` | AAC bitrate of the muxed audio. |
+
+For NVENC, FFmpeg receives `-rc vbr -cq 22 -b:v 0`: quality is controlled by
+`cq`, while bitrate varies with the scene. NVENC's `cq` scale is not equivalent
+to x264's `crf` scale. Choosing `h264_nvenc` requires an FFmpeg build with
+NVENC, an NVIDIA driver, and a compatible GPU. There is no automatic CPU
+fallback if encoding fails.
+
+```json
+{"video": {"encoder": "h264_nvenc", "cq": 22, "nvenc_preset": "p5"}}
+```
 
 The even-size rule comes from `yuv420p`: its chroma planes are half resolution,
 so an odd width or height cannot be encoded. The config check rejects it
@@ -94,11 +180,22 @@ upfront rather than letting ffmpeg fail minutes in.
 | `normalize` | bool | `true` | Loudness normalization (`loudnorm`, I = −14 LUFS). |
 | `fade_in` | float | `1.0` | Audio fade-in, seconds. |
 | `fade_out` | float | `3.0` | Audio fade-out, seconds. |
+| `track_gap` | float | `0.0` | Gap between tracks: positive adds silence; negative sets an equal-power crossfade. |
 | `start` | float | `0.0` | Skip this many seconds of the source. |
 | `duration` | float \| null | `null` | Use only this many seconds of the source. |
 
 `start` and `duration` are applied to the *source*, before `speed`. With
 `speed: 0.85`, a `duration` of 40 becomes ~47 seconds of video.
+For a track list, these settings apply to every track. By default each track is
+normalized to −14 LUFS, and fade-in/fade-out apply to the start and end of the
+whole sequence. Each middle track must be longer than twice the crossfade.
+
+```json
+{
+  "audio_file": ["first.mp3", "second.mp3", "third.mp3"],
+  "audio": {"track_gap": -1.5}
+}
+```
 
 The filter chain ffmpeg ends up running is, in order: speed (`asetrate` +
 `aresample`) → bass shelf → reverb (two cascaded `aecho` stages) → `loudnorm` →
@@ -293,10 +390,19 @@ used.
 
 ## `overlay`
 
-Full-frame effects applied last, to the finished frame.
+Full-frame effects for the composed frame, plus an optional transparent image
+layer composited above them.
 
 | Field | Type | Default | Meaning |
 |-------|------|---------|---------|
+| `image` | string or null | `null` | Image composited over the full frame, such as a logo PNG; alpha is preserved. |
+| `image_position` | list of 2 numbers | `[0.82, 0.04]` | Image top-left position as fractions of frame width and height, from 0 to 1. |
+| `image_width` | float | `0.14` | Layer width as a fraction of frame width. Aspect ratio is preserved; the image can be scaled up or down. |
+| `image_opacity` | float | `1.0` | Layer opacity, from 0 to 1. |
+| `image_intro_duration` | float | `0.0` | If positive, show the PNG only during the opening section. |
+| `image_outro_duration` | float | `0.0` | If positive, show the PNG only during the ending section. |
+| `image_fade_in` | float | `1.0` | PNG fade-in duration for intro/outro sections. |
+| `image_fade_out` | float | `1.0` | PNG fade-out duration for intro/outro sections. |
 | `vignette` | float | `0.55` | Vignette strength, 0–1. |
 | `vignette_size` | float | `0.78` | How far from the center the vignette starts. |
 | `scanlines` | float | `0.0` | Horizontal scanline strength, 0–1. The VHS look. |
@@ -307,9 +413,41 @@ Full-frame effects applied last, to the finished frame.
 | `fade_in` | float | `1.2` | Fade in from black, seconds. |
 | `fade_out` | float | `2.5` | Fade out to black, seconds. |
 
-The order matters and is fixed: tint → vignette → beat flash → scanlines →
-grain → fade → letterbox. The letterbox goes last so the bars stay pure black
-and grain-free.
+The image is composited above all effects and fades with the frame. Its width
+is relative to the output video size: `0.14` means 14% of the frame width.
+Upscaling and downscaling preserve aspect ratio, use the LANCZOS filter and fit
+inside the frame. Position coordinates are measured from the top-left corner.
+
+When both section durations are zero, the PNG remains visible throughout the
+video, preserving older configurations. For a title overlay during the first
+10 seconds and last 5 seconds, with one-second fades:
+
+```json
+{
+  "renderer": "gpu",
+  "video": {"width": 3840, "height": 2160, "fps": 30,
+            "encoder": "h264_nvenc", "cq": 22},
+  "cover": {"enabled": false},
+  "overlay": {"image": "input/covers/saxophone_music_4k_overlay.png",
+              "image_position": [0, 0], "image_width": 1.0,
+              "image_intro_duration": 10, "image_outro_duration": 5,
+              "image_fade_in": 1, "image_fade_out": 1}
+}
+```
+
+```json
+{
+  "overlay": {
+    "image": "logo.png",
+    "image_position": [0.82, 0.04],
+    "image_width": 0.14,
+    "image_opacity": 0.85
+  }
+}
+```
+
+The full-frame effects run in this order: tint → vignette → beat flash →
+scanlines → grain → fade → letterbox. The PNG layer is composited after them.
 
 ## A complete example
 
@@ -339,7 +477,10 @@ and grain-free.
     "artist": { "text": "Kaleo" }
   },
 
-  "overlay": { "vignette": 0.6, "beat_flash": 0.05 }
+  "overlay": {
+    "vignette": 0.6, "beat_flash": 0.05,
+    "image": "logo.png", "image_position": [0.82, 0.04], "image_width": 0.14
+  }
 }
 ```
 

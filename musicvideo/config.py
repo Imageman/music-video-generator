@@ -21,10 +21,15 @@ class VideoCfg:
     width: int = 1920
     height: int = 1080
     fps: int = 30
+    #: libx264 по умолчанию; h264_nvenc включает аппаратное кодирование NVIDIA
+    encoder: str = "libx264"
     #: качество x264 (меньше = лучше). 18 почти без потерь, но на зернистой
     #: картинке даёт огромный файл; 21 — разумный баланс для таких роликов
     crf: int = 21
+    #: целевое постоянное качество NVENC в режиме VBR
+    cq: int = 22
     preset: str = "medium"        # пресет скорости x264
+    nvenc_preset: str = "p5"      # сбалансированный пресет скорости/качества NVENC
     pixel_format: str = "yuv420p"
     audio_bitrate: str = "320k"
 
@@ -44,6 +49,8 @@ class AudioCfg:
     #: плавное появление/затухание звука в секундах
     fade_in: float = 1.0
     fade_out: float = 3.0
+    #: промежуток между треками: плюс = тишина, минус = кроссфейд
+    track_gap: float = 0.0
     #: обрезка исходника (до применения скорости)
     start: float = 0.0
     duration: float | None = None
@@ -185,6 +192,13 @@ class ProgressCfg:
 
 @dataclass
 class OverlayCfg:
+    #: прозрачное изображение поверх готового кадра, например логотип PNG
+    image: str | None = None
+    #: координаты левого верхнего угла в долях ширины и высоты кадра
+    image_position: list[float] = field(default_factory=lambda: [0.82, 0.04])
+    #: ширина изображения в долях ширины кадра; пропорции сохраняются
+    image_width: float = 0.14
+    image_opacity: float = 1.0
     vignette: float = 0.55        # сила виньетки 0..1
     vignette_size: float = 0.78
     scanlines: float = 0.0        # сила горизонтальных полос 0..1
@@ -194,11 +208,84 @@ class OverlayCfg:
     beat_flash: float = 0.0       # засветка кадра на бит
     fade_in: float = 1.2          # появление картинки из чёрного
     fade_out: float = 2.5
+    #: если задано, PNG показывается только в интро/аутро; 0 сохраняет
+    #: прежнее поведение — логотип виден весь ролик
+    image_intro_duration: float = 0.0
+    image_outro_duration: float = 0.0
+    image_fade_in: float = 1.0
+    image_fade_out: float = 1.0
+
+
+@dataclass
+class GPUCfg:
+    #: предел кэша подготовленных фоновых текстур
+    texture_cache_mb: int = 768
+    #: GLSL-эффекты: wave, glow, color_shift, grain, vignette,
+    #: scanlines, ripple, kaleidoscope, glitch, audio_light, frequency_neon
+    effects: list[str] = field(default_factory=lambda: [
+        "wave", "glow", "color_shift", "grain", "vignette", "audio_light",
+    ])
+    wave_strength: float = 0.004
+    ripple_strength: float = 0.006
+    glow_strength: float = 0.22
+    color_shift_strength: float = 0.12
+    audio_light_strength: float = 1.0
+    contrast: float = 1.0
+    #: Минимальный порог сигнала; адаптирующийся фон может поднимать его.
+    #: threshold ограничивает площадь, expansion задаёт кривую реакции.
+    neon_bass_gate: float = 0.20
+    neon_mid_gate: float = 0.20
+    neon_high_gate: float = 0.20
+    neon_bass_threshold: float = 1.0
+    neon_mid_threshold: float = 1.0
+    neon_high_threshold: float = 1.0
+    neon_bass_expansion: float = 1.0
+    neon_mid_expansion: float = 1.0
+    neon_high_expansion: float = 1.0
+    neon_gate_softness: float = 0.03
+    neon_threshold_softness: float = 0.035
+    #: Пиковая огибающая: спад на 50% за этот интервал, в секундах.
+    neon_release_half_life: float = 0.10
+    #: Превышение адаптирующегося фона для начала реакции (шкала сигнала 0..1).
+    neon_adaptation_margin: float = 0.02
+    #: Превышение адаптивного порога, открывающее 100% области канала.
+    neon_adaptation_range: float = 0.15
+    #: Постоянные времени роста/спада адаптирующегося фона, в секундах.
+    neon_saturation_attack: float = 0.75
+    neon_saturation_release: float = 1.50
+    #: Индивидуальная адаптация каналов; None использует общие параметры выше.
+    neon_bass_adaptation_margin: float | None = 0.024
+    neon_mid_adaptation_margin: float | None = 0.009
+    neon_high_adaptation_margin: float | None = 0.026
+    neon_bass_saturation_attack: float | None = 0.5
+    neon_mid_saturation_attack: float | None = 1.5
+    neon_high_saturation_attack: float | None = 1.5
+    neon_bass_saturation_release: float | None = 3.0
+    neon_mid_saturation_release: float | None = 3.0
+    neon_high_saturation_release: float | None = 3.0
+    neon_bass_adaptation_range: float | None = 0.05
+    neon_mid_adaptation_range: float | None = 0.05
+    neon_high_adaptation_range: float | None = 0.05
+    #: Остаточная площадь устойчивого сильного сигнала и её степенная кривая.
+    neon_steady_strength: float = 0.35
+    neon_steady_power: float = 2.0
+    #: Спад ниже привычного фона, подавляющий постоянную составляющую свечения.
+    neon_steady_dip_width: float = 0.02
+    #: RMS-уровень управляет потолком свечения; шкала analysis.level в дБ.
+    neon_loudness_floor_db: float = -42.0
+    neon_loudness_full_db: float = -20.0
+    neon_loudness_gamma: float = 1.5
+    #: Радиус размытия float-карт до нормализации и эквализации, в пикселях.
+    neon_heat_blur_radius: float = 2.0
+    #: Радиус Gaussian blur пороговой маски как доля короткой стороны кадра.
+    #: Значения больше 1 трактуются как абсолютный радиус в выходных пикселях.
+    neon_blur_radius: float = 0.1
+    neon_strength: float = 1.35
 
 
 @dataclass
 class Config:
-    audio_file: str = ""
+    audio_file: str | list[str] = ""
     output: str = "output/video.mp4"
     preset: str | None = None
     video: VideoCfg = field(default_factory=VideoCfg)
@@ -213,6 +300,8 @@ class Config:
     #: рендерить только первые N секунд (быстрая проверка)
     preview: float | None = None
     workers: int = 0              # 0 = по числу ядер
+    renderer: str = "auto"        # auto | cpu | gpu
+    gpu: GPUCfg = field(default_factory=GPUCfg)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -233,6 +322,7 @@ _TYPES: dict[str, type] = {
     "VisualizerCfg": VisualizerCfg, "TextCfg": TextCfg,
     "TextItemCfg": TextItemCfg, "ProgressCfg": ProgressCfg,
     "OverlayCfg": OverlayCfg, "Config": Config,
+    "GPUCfg": GPUCfg,
 }
 
 

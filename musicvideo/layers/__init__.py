@@ -2,8 +2,12 @@
 
 from .background import Background
 from .cover import Cover
+from .image_overlay import ImageOverlay
 from .overlay import Overlay
 from .text import ProgressBar, TextLayer
 from .visualizer import Visualizer
 
-__all__ = ["Background", "Cover", "Overlay", "ProgressBar", "TextLayer", "Visualizer"]
+__all__ = [
+    "Background", "Cover", "ImageOverlay", "Overlay", "ProgressBar",
+    "TextLayer", "Visualizer",
+]

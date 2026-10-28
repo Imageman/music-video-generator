@@ -58,12 +58,48 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ru": "куда записать JSON ('-' = stdout)",
     },
     "cli.arg.audio": {
-        "en": "path to the audio file (mp3/wav/flac/m4a...)",
-        "ru": "путь к аудиофайлу (mp3/wav/flac/m4a...)",
+        "en": "one or more audio files (mp3/wav/flac/m4a...)",
+        "ru": "один или несколько аудиофайлов (mp3/wav/flac/m4a...)",
+    },
+    "cli.arg.track_gap": {
+        "en": "seconds between tracks: positive adds silence, negative crossfades",
+        "ru": "секунды между треками: плюс добавляет тишину, минус включает кроссфейд",
     },
     "cli.arg.image": {
         "en": "background image, a folder of images, or the flag repeated",
         "ru": "картинка фона, папка с картинками или флаг несколько раз",
+    },
+    "cli.arg.overlay_image": {
+        "en": "transparent image composited over the finished frame",
+        "ru": "прозрачное изображение поверх готового кадра",
+    },
+    "cli.arg.overlay_width": {
+        "en": "overlay image width as a fraction of frame width",
+        "ru": "ширина изображения в долях ширины кадра",
+    },
+    "cli.arg.overlay_position": {
+        "en": "overlay top-left position as frame fractions X Y",
+        "ru": "координаты левого верхнего угла в долях кадра X Y",
+    },
+    "cli.arg.overlay_opacity": {
+        "en": "overlay image opacity, from 0 to 1",
+        "ru": "непрозрачность изображения, от 0 до 1",
+    },
+    "cli.arg.overlay_intro": {
+        "en": "show the overlay during the opening seconds",
+        "ru": "показывать PNG-слой в начале ролика, секунд",
+    },
+    "cli.arg.overlay_outro": {
+        "en": "show the overlay during the ending seconds",
+        "ru": "показывать PNG-слой в конце ролика, секунд",
+    },
+    "cli.arg.overlay_fade_in": {
+        "en": "overlay fade-in duration",
+        "ru": "длительность появления PNG-слоя",
+    },
+    "cli.arg.overlay_fade_out": {
+        "en": "overlay fade-out duration",
+        "ru": "длительность затухания PNG-слоя",
     },
     "cli.arg.output": {
         "en": "where to save the video",
@@ -149,9 +185,25 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "frames per second",
         "ru": "кадров в секунду",
     },
+    "cli.arg.encoder": {
+        "en": "video encoder: libx264 (CPU) or h264_nvenc (NVIDIA GPU)",
+        "ru": "видеокодек: libx264 (CPU) или h264_nvenc (видеокарта NVIDIA)",
+    },
     "cli.arg.crf": {
         "en": "x264 quality (lower = better)",
         "ru": "качество x264 (меньше = лучше)",
+    },
+    "cli.arg.cq": {
+        "en": "NVENC constant quality target, 1..51 (default 22)",
+        "ru": "целевое постоянное качество NVENC, 1..51 (по умолчанию 22)",
+    },
+    "cli.arg.nvenc_preset": {
+        "en": "NVENC speed/quality preset (p1 fastest, p7 best quality)",
+        "ru": "пресет скорости/качества NVENC (p1 быстрее, p7 качественнее)",
+    },
+    "cli.arg.audio_bitrate": {
+        "en": "AAC audio bitrate, e.g. 196k",
+        "ru": "битрейт звука AAC, например 196k",
     },
     "cli.arg.preview": {
         "en": "render only the first SEC seconds",
@@ -160,6 +212,14 @@ MESSAGES: dict[str, dict[str, str]] = {
     "cli.arg.workers": {
         "en": "number of render processes (1 = no parallelism)",
         "ru": "число процессов рендера (1 = без параллелизма)",
+    },
+    "cli.arg.renderer": {
+        "en": "frame renderer: GPU uses ModernGL; auto falls back to CPU",
+        "ru": "рендер кадров: GPU через ModernGL; auto переключается на CPU",
+    },
+    "cli.arg.gpu_effects": {
+        "en": "comma-separated GPU effects, or none",
+        "ru": "эффекты GPU через запятую или none",
     },
     "cli.arg.quiet": {
         "en": "no progress bar and no messages",
@@ -213,11 +273,39 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "Analyzing the spectrum...",
         "ru": "Анализирую спектр...",
     },
+    "progress.audio_track": {
+        "en": "Audio: {name}",
+        "ru": "Звук: {name}",
+    },
+    "progress.audio_join": {
+        "en": "Joining tracks",
+        "ru": "Склеиваю треки",
+    },
+    "progress.audio_decode": {
+        "en": "Decoding audio",
+        "ru": "Декодирование аудио",
+    },
+    "progress.audio_analysis": {
+        "en": "Spectrum analysis",
+        "ru": "Анализ спектра",
+    },
+    "progress.video_frames": {
+        "en": "Rendering frames",
+        "ru": "Рендер кадров",
+    },
     "log.render": {
         "en": "Rendering: {frames} frames, {width}x{height} @ {fps} fps, "
               "workers: {workers}",
         "ru": "Рендер: {frames} кадров, {width}x{height} @ {fps} fps, "
               "воркеров: {workers}",
+    },
+    "log.renderer.gpu": {
+        "en": "Frame renderer: ModernGL GPU",
+        "ru": "Рендер кадров: GPU через ModernGL",
+    },
+    "log.renderer.cpu_fallback": {
+        "en": "ModernGL GPU unavailable; using CPU: {reason}",
+        "ru": "GPU через ModernGL недоступен, использую CPU: {reason}",
     },
     "cli.done": {
         "en": "Done: {path}",
@@ -329,6 +417,20 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "Empty excerpt: start={start}s for a duration of {duration:.1f}s",
         "ru": "Пустой отрезок: start={start}s при длительности {duration:.1f}s",
     },
+    "err.track_overlap_long": {
+        "en": "A {overlap}s crossfade is too long for a {duration}s track; "
+              "this track must be longer than {required}s",
+        "ru": "Кроссфейд {overlap}с слишком длинный для трека длительностью {duration}с; "
+              "этот трек должен быть длиннее {required}с",
+    },
+    "err.track_mix_duration": {
+        "en": "The combined audio duration is not positive",
+        "ru": "Итоговая длительность звука должна быть положительной",
+    },
+    "err.track_gap_invalid": {
+        "en": "audio.track_gap must be a finite number of seconds",
+        "ru": "audio.track_gap должен быть конечным числом секунд",
+    },
     "err.decode_failed": {
         "en": "Could not decode the audio:\n  {details}",
         "ru": "Не удалось декодировать звук:\n  {details}",
@@ -351,6 +453,26 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "Cover art not found: {path}",
         "ru": "Обложка не найдена: {path}",
     },
+    "err.overlay_image_missing": {
+        "en": "Overlay image not found: {path}",
+        "ru": "Изображение верхнего слоя не найдено: {path}",
+    },
+    "err.overlay_image_invalid": {
+        "en": "Could not read overlay image: {path}",
+        "ru": "Не удалось прочитать изображение верхнего слоя: {path}",
+    },
+    "err.overlay_image_width": {
+        "en": "overlay.image_width must be greater than 0 and at most 1",
+        "ru": "overlay.image_width должен быть больше 0 и не больше 1",
+    },
+    "err.overlay_image_opacity": {
+        "en": "overlay.image_opacity must be between 0 and 1",
+        "ru": "overlay.image_opacity должен быть от 0 до 1",
+    },
+    "err.overlay_image_position": {
+        "en": "overlay.image_position must contain two fractions between 0 and 1",
+        "ru": "overlay.image_position должен содержать две доли от 0 до 1",
+    },
     "err.unknown_style": {
         "en": "Unknown visualizer style '{name}'. Available: {available}",
         "ru": "Неизвестный стиль визуализатора '{name}'. Доступные: {available}",
@@ -363,6 +485,18 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "Width and height must be even for {pixel_format}: got {width}x{height}",
         "ru": "Ширина и высота должны быть чётными для {pixel_format}: "
               "получено {width}x{height}",
+    },
+    "err.video_encoder": {
+        "en": "video.encoder must be 'libx264' or 'h264_nvenc'",
+        "ru": "video.encoder должен быть 'libx264' или 'h264_nvenc'",
+    },
+    "err.video_cq": {
+        "en": "video.cq must be an integer from 1 to 51",
+        "ru": "video.cq должен быть целым числом от 1 до 51",
+    },
+    "err.nvenc_preset": {
+        "en": "video.nvenc_preset must be one of p1 through p7",
+        "ru": "video.nvenc_preset должен быть от p1 до p7",
     },
     "err.bad_fps": {
         "en": "fps must be positive, got {value}",

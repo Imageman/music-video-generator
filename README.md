@@ -29,6 +29,13 @@ slowed down and drenched in reverb along the way — the classic
   pulsing with the bass, frame flash on a hit.
 - **Background**: a single image, a folder of images (with crossfades), or a
   procedural gradient when there is no picture at all.
+- **PNG overlay**: a logo or other transparent image with configurable position,
+  size and opacity; it can appear only in the intro and outro with fades.
+- **ModernGL/GLSL GPU rendering**: photos, transitions, music-reactive effects,
+  all six visualizer styles, text and composition run in one OpenGL context.
+- **4K and long videos**: frames stream directly to FFmpeg instead of building
+  an image sequence on disk or retaining the clip in RAM. The photo texture
+  cache is bounded; NVENC uses CQ 22 by default.
 - **6 ready-made presets**, including a vertical `shorts` one for Reels/TikTok.
 - **Parallel rendering** across CPU cores, piped frame by frame into ffmpeg.
 - **Bilingual interface**: English and Russian, picked with `--lang` or from
@@ -59,8 +66,10 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Two dependencies only — NumPy and Pillow. Everything else is the standard
-library plus ffmpeg.
+Python dependencies are NumPy, Pillow, ModernGL and glcontext. FFmpeg is
+installed separately. `--renderer auto` uses GPU when an OpenGL context is
+available and otherwise falls back to CPU; `--renderer gpu` reports a clear
+error if the context cannot be created.
 
 ## Quick start
 
@@ -75,6 +84,36 @@ On your own material:
 
 ```bash
 python -m musicvideo track.mp3 -i cover.jpg -p aesthetic -o output/video.mp4
+```
+
+On Windows, run `render_input.bat` to combine all MP3 files directly in
+`input\mp3` into one MP4. Nested folders are not searched; two seconds of silence
+are inserted between songs. Backgrounds come from `input\png`; the title card
+appears for the first and last 30 seconds. The render uses 2560×1440, 30 fps,
+NVENC P6/CQ26, 196k AAC audio, the `bars` visualizer, and the GPU
+`frequency_neon` effect. Track titles are hidden. Output:
+`D:\tmp\music\all_tracks_2k_p6_cq26.mp4`.
+
+```bat
+render_input.bat
+render_input.bat "D:\Music\input" "D:\Music\rendered"
+```
+
+An available OpenGL renderer is required; `frequency_neon` does not fall back
+to CPU. The optional second argument selects the output folder. Without
+arguments, the script reads `input\mp3` and writes to `D:\tmp\music`.
+
+4K with NVIDIA NVENC and a transparent title card in the first 10 seconds and
+last 5 seconds:
+
+```powershell
+python -m musicvideo track.mp3 -i input/png/ --size 3840x2160 --renderer gpu --encoder h264_nvenc --cq 22 --no-cover --overlay-image input/covers/saxophone_music_4k_overlay.png --overlay-width 1 --overlay-position 0 0 --overlay-intro 10 --overlay-outro 5 --overlay-fade-in 1 --overlay-fade-out 1
+```
+
+Compare the CPU and GPU renderers with a streamed 60-second benchmark:
+
+```powershell
+python scripts/benchmark_renderers.py --size 1920x1080 --fps 30 --seconds 60
 ```
 
 Title and artist are taken from the file's tags; set them by hand if you like:
@@ -120,6 +159,13 @@ python -m musicvideo track.mp3 -i art.jpg --speed 0.85 --reverb 0.45 --bass 3
 
 # slideshow: every image in a folder, with crossfades
 python -m musicvideo track.mp3 -i pics/ -p aesthetic
+
+# several tracks in one video: silence or overlap at each transition
+python -m musicvideo first.mp3 second.mp3 third.mp3 --track-gap 3 -i art.jpg
+python -m musicvideo first.mp3 second.mp3 --track-gap -1.5 -i art.jpg
+
+# transparent PNG logo over the frame; width is 14% of the video
+python -m musicvideo track.mp3 -i art.jpg --overlay-image logo.png --overlay-width 0.14
 
 # vertical video for Shorts
 python -m musicvideo track.mp3 -i art.jpg -p shorts -o output/short.mp4
@@ -175,7 +221,8 @@ color and leaves the rest of the visualizer as the preset left it.
 | `visualizer` | `style`, `radius`, `amplitude` | look and geometry of the spectrum |
 | `visualizer` | `range` | which frequencies to show: `full`/`bass`/`mid`/`high` |
 | `analysis` | `attack`, `decay` | how sharply the bands react to the sound |
-| `video` | `crf` | quality: 18 is near-lossless, 20–23 is the usual choice |
+| `video` | `crf` | CPU x264 quality: 18 is near-lossless, 20–23 is the usual choice |
+| `video` | `encoder`, `cq` | NVIDIA NVENC with constant quality `22` |
 
 Every field is documented in [docs/configuration.md](docs/configuration.md).
 

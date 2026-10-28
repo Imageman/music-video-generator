@@ -28,6 +28,14 @@
   засветка кадра на удар.
 - **Фон**: одна картинка, папка с картинками (с кроссфейдом) или процедурный
   градиент, если картинки нет вовсе.
+- **PNG поверх кадра**: логотип или другое прозрачное изображение с настройкой
+  позиции, размера и непрозрачности; можно показать только в интро и аутро
+  с fade-in/fade-out.
+- **GPU-рендер ModernGL/GLSL**: фото, переходы, музыка-реактивные эффекты,
+  шесть стилей визуализатора, текст и композиция считаются в одном OpenGL-
+  контексте. Готовый RGB-кадр сразу передаётся FFmpeg.
+- **4K и длинные ролики**: кадры не сохраняются пачкой и не пишутся во
+  временные PNG; кэш фото ограничен. NVENC использует CQ 22 по умолчанию.
 - **6 готовых пресетов**, включая вертикальный `shorts` для Reels/TikTok.
 - **Параллельный рендер** по числу ядер и покадровая сборка через ffmpeg.
 - **Двуязычный интерфейс**: английский и русский, выбирается флагом `--lang`
@@ -57,8 +65,9 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Зависимостей всего две — NumPy и Pillow. Остальное — стандартная библиотека
-и ffmpeg.
+Зависимости Python: NumPy, Pillow, ModernGL и glcontext. FFmpeg нужен отдельно.
+`--renderer auto` использует GPU при доступном OpenGL и иначе переходит к CPU;
+`--renderer gpu` завершится понятной ошибкой, если контекст не создаётся.
 
 ## Быстрый старт
 
@@ -73,6 +82,35 @@ python -m musicvideo examples/demo.wav -i examples/demo.jpg -p aesthetic
 
 ```bash
 python -m musicvideo track.mp3 -i cover.jpg -p aesthetic -o output/video.mp4
+```
+
+Для пакетного рендера на Windows запустите `render_input.bat`: он объединит все
+MP3 прямо в `input\mp3` в один MP4; вложенные папки не обходятся, между песнями
+добавляются 2 секунды тишины. Фоны берутся из `input\png`, заставка показывается
+первые и последние 30 секунд. Используются 2560×1440, 30 fps, NVENC P6/CQ26,
+AAC 196k, визуализатор `bars` и GPU-фильтр `frequency_neon`. Названия треков не
+выводятся. Результат: `D:\tmp\music\all_tracks_2k_p6_cq26.mp4`.
+
+```bat
+render_input.bat
+render_input.bat "D:\Music\input" "D:\Music\rendered"
+```
+
+Нужен доступный OpenGL-рендерер: если GPU недоступен, `frequency_neon` не
+переключается автоматически на CPU. Второй аргумент задаёт папку результата;
+если аргументы не указаны, входом служит `input\mp3`, а результатом — `D:\tmp\music`.
+
+Пример 4K с RTX/NVENC и прозрачной обложкой первые 10 секунд и последние
+5 секунд:
+
+```powershell
+python -m musicvideo track.mp3 -i input/png/ --size 3840x2160 --renderer gpu --encoder h264_nvenc --cq 22 --no-cover --overlay-image input/covers/saxophone_music_4k_overlay.png --overlay-width 1 --overlay-position 0 0 --overlay-intro 10 --overlay-outro 5 --overlay-fade-in 1 --overlay-fade-out 1
+```
+
+Для проверки скорости CPU и GPU без длинного ролика:
+
+```powershell
+python scripts/benchmark_renderers.py --size 1920x1080 --fps 30 --seconds 60
 ```
 
 Название и исполнитель подставляются из тегов файла; при желании — вручную:
@@ -119,6 +157,13 @@ python -m musicvideo track.mp3 -i art.jpg --speed 0.85 --reverb 0.45 --bass 3
 
 # слайдшоу: все картинки из папки, с кроссфейдом
 python -m musicvideo track.mp3 -i pics/ -p aesthetic
+
+# несколько треков в одном ролике: тишина или перекрытие на переходе
+python -m musicvideo first.mp3 second.mp3 third.mp3 --track-gap 3 -i art.jpg
+python -m musicvideo first.mp3 second.mp3 --track-gap -1.5 -i art.jpg
+
+# логотип PNG поверх кадра; ширина 14% от видео
+python -m musicvideo track.mp3 -i art.jpg --overlay-image logo.png --overlay-width 0.14
 
 # вертикальное видео для Shorts
 python -m musicvideo track.mp3 -i art.jpg -p shorts -o output/short.mp4
@@ -174,7 +219,8 @@ python -m musicvideo track.mp3 -c my.json
 | `visualizer` | `style`, `radius`, `amplitude` | вид и геометрия спектра |
 | `visualizer` | `range` | какие частоты показывать: `full`/`bass`/`mid`/`high` |
 | `analysis` | `attack`, `decay` | насколько резко полосы реагируют на звук |
-| `video` | `crf` | качество: 18 — почти без потерь, 20–23 — обычный выбор |
+| `video` | `crf` | качество CPU x264: 18 — почти без потерь, 20–23 — обычный выбор |
+| `video` | `encoder`, `cq` | NVENC для NVIDIA с постоянным качеством `22` |
 
 Каждое поле описано в [docs/configuration.ru.md](docs/configuration.ru.md).
 

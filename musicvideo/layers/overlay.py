@@ -115,3 +115,7 @@ class Overlay:
             remain = self.duration - t
             value = min(value, remain / cfg.fade_out)
         return float(np.clip(value, 0.0, 1.0))
+
+    def fade_alpha(self, t: float) -> float:
+        """Прозрачность полноэкранного фейда — для верхнего PNG-слоя."""
+        return self._fade(t)

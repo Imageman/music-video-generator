@@ -5,11 +5,13 @@
 [← back to README](../README.md) · [configuration](configuration.md) · [Python API](api.md)
 
 ```bash
-python -m musicvideo [SUBCOMMAND] AUDIO [OPTIONS]
+python -m musicvideo [SUBCOMMAND] [AUDIO ...] [OPTIONS]
 ```
 
 `AUDIO` is any file ffmpeg can read: mp3, wav, flac, m4a, ogg, opus, and so on.
-The subcommand may be omitted — anything that is not a known subcommand is
+Pass multiple files to combine them in order into one video. Omit the positional
+files when they are set in the config. The subcommand may
+be omitted — anything that is not a known subcommand is
 treated as arguments to `render`, so these two lines are the same:
 
 ```bash
@@ -35,6 +37,26 @@ python -m musicvideo track.mp3 -i art.jpg -p aesthetic -o output/video.mp4
 Runs the whole pipeline: audio effects → spectrum analysis → frame rendering →
 encoding with ffmpeg. Progress is shown on stderr with an ETA (suppressed with
 `--quiet` and when stderr is not a terminal).
+
+### Windows batch rendering
+
+Run `render_input.bat` from the project. It combines all MP3 files directly in
+`input\mp3` into one MP4; nested folders are not searched, and two seconds of
+silence are inserted between songs. Backgrounds come from `input\png`; the title
+card appears for the first and last 30 seconds, and track titles are hidden.
+Settings are 2560×1440, 30 fps, NVENC P6/CQ26, 196k AAC, the `bars` visualizer,
+and the GPU `frequency_neon` effect. Output:
+`D:\tmp\music\all_tracks_2k_p6_cq26.mp4`.
+
+```bat
+render_input.bat
+render_input.bat "D:\Music\input" "D:\Music\rendered"
+```
+
+The optional first argument selects the MP3 folder; the second selects the
+output folder. Defaults are `<project folder>\input\mp3` and `D:\tmp\music`.
+An available OpenGL renderer is required; `frequency_neon` does not fall back
+to CPU.
 
 ### `still`
 
@@ -77,17 +99,63 @@ All of these work with `render`, `still` and `dump-config`.
 
 | Flag | Meaning |
 |------|---------|
-| `AUDIO` | Positional. The audio file. Can also come from `audio_file` in a config. |
+| `AUDIO [AUDIO ...]` | One or more audio files; can also come from `audio_file` in a config. |
 | `-i`, `--image PATH` | Background: an image, a folder of images, or the flag repeated several times. |
 | `-o`, `--output PATH` | Where to write the result. Default: `output/video.mp4`. |
 | `-c`, `--config PATH` | A JSON settings file. See [configuration](configuration.md). |
 | `-p`, `--preset NAME` | One of `aesthetic`, `lofi`, `phonk`, `minimal`, `retro`, `shorts`. |
 | `--lang {en,ru}` | Interface language. See [Language](#language). |
+| `--track-gap SECONDS` | Gap between tracks; a negative value sets the crossfade duration. |
+| `--overlay-image PATH` | PNG or other image composited over the finished frame. |
+| `--overlay-width 0..1` | Overlay image width as a fraction of video width. |
+| `--overlay-position X Y` | Overlay top-left position as fractions of the frame. |
+| `--overlay-opacity 0..1` | Overlay image opacity. |
+| `--overlay-intro SEC` | Show the PNG during the opening section. |
+| `--overlay-outro SEC` | Show the PNG during the ending section. |
+| `--overlay-fade-in SEC` | PNG fade-in duration in intro/outro. |
+| `--overlay-fade-out SEC` | PNG fade-out duration in intro/outro. |
+| `--renderer {auto,cpu,gpu}` | Select the frame renderer; `auto` falls back to CPU if OpenGL is unavailable. |
+| `--gpu-effects LIST` | Comma-separated GLSL effects, or `none`. |
 
 A folder passed to `-i` is expanded into every `.jpg`, `.jpeg`, `.png`,
 `.webp`, `.bmp`, `.jfif` and `.avif` inside it, sorted by name, and the images
 are crossfaded across the length of the clip. A path that does not exist is an
 error, raised before the long work starts.
+
+Set the pause or overlap between audio files with `--track-gap`. Positive
+values add silence; negative values set an equal-power crossfade:
+
+```bash
+python -m musicvideo first.mp3 second.mp3 third.mp3 --track-gap 3 -i art.jpg
+python -m musicvideo first.mp3 second.mp3 --track-gap -1.5 -i art.jpg
+```
+
+Tracks are normalized to −14 LUFS by default. Crossfades use sine equal-power
+curves to avoid a dip in perceived loudness. Each track between two transitions
+must be longer than twice the crossfade duration.
+
+For NVIDIA hardware encoding, select NVENC:
+
+```bash
+python -m musicvideo track.mp3 -i art.jpg --encoder h264_nvenc --cq 22
+```
+
+GPU rendering with a transparent title card for the first 10 seconds and last
+5 seconds, fading over one second:
+
+```bash
+python -m musicvideo track.mp3 -i input/png/ --size 3840x2160 \
+  --renderer gpu --encoder h264_nvenc --cq 22 --no-cover \
+  --overlay-image input/covers/saxophone_music_4k_overlay.png \
+  --overlay-width 1 --overlay-position 0 0 \
+  --overlay-intro 10 --overlay-outro 5 \
+  --overlay-fade-in 1 --overlay-fade-out 1
+```
+
+`--gpu-effects wave,glow,color_shift,grain,vignette,audio_light` selects the
+default audio-reactive shader set; pass `none` to turn it off. GPU readback
+streams one RGB frame at a time to FFmpeg, with no intermediate image files.
+The RGB frame is copied through system RAM before encoding.
 
 ### Text
 
@@ -95,6 +163,20 @@ error, raised before the long work starts.
 |------|---------|
 | `--title TEXT` | Track title. Falls back to the file's tag, then to the file name. |
 | `--artist TEXT` | Artist. Falls back to the `artist` or `album_artist` tag. |
+
+When multiple files are passed, the default title, artist and embedded cover
+come from the first track.
+
+### Transparent PNG overlay
+
+```bash
+python -m musicvideo track.mp3 -i art.jpg --overlay-image logo.png \
+    --overlay-width 0.14 --overlay-position 0.82 0.04 --overlay-opacity 0.85
+```
+
+Width is relative to the output video. The image keeps its aspect ratio and is
+resized up or down with LANCZOS; PNG alpha is preserved. Defaults are position
+`[0.82, 0.04]`, width `0.14` and opacity `1.0`.
 
 ### Cover art
 
@@ -104,7 +186,7 @@ error, raised before the long work starts.
 | `--no-cover` | Draw no cover at all. |
 
 Without `--cover` the cover is resolved in this order: the artwork embedded in
-the audio file's tags → the first background image. `--no-cover` skips this
+the first audio file's tags → the first background image. `--no-cover` skips this
 entirely.
 
 ### Visualizer
@@ -135,12 +217,31 @@ entirely.
 
 | Flag | Meaning |
 |------|---------|
+| `--encoder {libx264,h264_nvenc}` | CPU encoding or NVIDIA NVENC; needs a compatible GPU, driver and FFmpeg build. |
 | `--size WxH` | Resolution, e.g. `1920x1080` or `1080x1920`. Both sides must be even. |
 | `--fps N` | Frames per second. |
-| `--crf N` | x264 quality; lower is better and bigger. Default `21`. |
+| `--crf N` | CPU x264 quality; lower is better and bigger. Default `21`. |
+| `--cq N` | NVENC constant quality, 1–51. Default `22`; the scale differs from x264 CRF. |
+| `--nvenc-preset {p1,...,p7}` | NVENC speed/quality; `p1` is faster, `p7` favors quality. |
+| `--audio-bitrate RATE` | AAC audio bitrate, e.g. `196k`; default `320k`. |
 | `--preview SEC` | Render only the first SEC seconds; the audio is trimmed to match. |
 | `--workers N` | Render processes. `1` disables parallelism. |
+| `--renderer {auto,cpu,gpu}` | Frame composition backend. GPU rendering uses one OpenGL context and does not use CPU worker processes. |
+| `--gpu-effects LIST` | GPU shader effects: `wave`, `glow`, `color_shift`, `grain`, `vignette`, `scanlines`, `ripple`, `kaleidoscope`, `glitch`, `audio_light`; or `none`. |
 | `--quiet` | No progress bar and no messages. |
+
+The benchmark script compares streamed frame creation and encoding:
+
+```bash
+python scripts/benchmark_renderers.py --size 1920x1080 --fps 30 --seconds 60
+python scripts/benchmark_renderers.py --size 2560x1440 --fps 30 --seconds 60 --encoder h264_nvenc
+```
+
+It reports measured total FPS, renderer/readback and FFmpeg write/finalize
+times. The CPU reference uses one worker so frame-generation and encoding
+times stay separable. Run the requested 60-second cases on the target NVIDIA
+computer for hardware-specific results; no benchmark numbers are assumed by
+the project.
 
 With `--workers 0` (the default) the worker count is one less than the number
 of CPU cores, capped so that each worker gets at least ~40 frames — short

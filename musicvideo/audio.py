@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import sys
 
 import numpy as np
+from numba import njit
+from tqdm import tqdm
 
 from .config import AnalysisCfg
+from .i18n import tr
 
 #: Сколько кадров считаем за один проход FFT (компромисс память/скорость).
 _CHUNK = 256
@@ -88,13 +92,23 @@ def _envelope(x: np.ndarray, attack: float, decay: float) -> np.ndarray:
     """Асимметричное сглаживание по времени: резко вверх, плавно вниз."""
     attack = float(np.clip(attack, 1e-3, 1.0))
     decay = float(np.clip(decay, 1e-3, 1.0))
+    matrix = x.reshape(-1, 1) if x.ndim == 1 else x
+    return _envelope_kernel(matrix, attack, decay).reshape(x.shape)
+
+
+@njit(cache=True)
+def _envelope_kernel(x: np.ndarray, attack: float, decay: float) -> np.ndarray:
+    """Compile the sequential recurrence without per-frame NumPy allocations."""
     out = np.empty_like(x)
-    prev = x[0] if len(x) else x
-    for i in range(len(x)):
-        cur = x[i]
-        rate = np.where(cur > prev, attack, decay)
-        prev = prev + (cur - prev) * rate
-        out[i] = prev
+    if x.shape[0] == 0:
+        return out
+    for band in range(x.shape[1]):
+        prev = np.float64(x[0, band])
+        for frame in range(x.shape[0]):
+            cur = np.float64(x[frame, band])
+            rate = attack if cur > prev else decay
+            prev = prev + (cur - prev) * rate
+            out[frame, band] = prev
     return out
 
 
@@ -117,6 +131,8 @@ def analyze(
     fps: int,
     cfg: AnalysisCfg,
     n_frames: int | None = None,
+    *,
+    show_progress: bool = False,
 ) -> Analysis:
     """Считает спектр и огибающие для каждого кадра видео."""
     n_fft = int(cfg.n_fft)
@@ -124,13 +140,13 @@ def analyze(
     if n_frames is None:
         n_frames = max(1, int(np.ceil(len(samples) / hop)))
 
-    # Кадров может быть запрошено больше, чем есть звука (например, когда
-    # длительность взята из контейнера) — добиваем хвост тишиной, иначе
-    # последние окна вылезут за границу массива.
+    # Окна выбираются из массива без его копии, дополненной тишиной. Это
+    # сохраняет память примерно на уровне самого декодированного аудио даже
+    # для часовых треков вместо создания ещё одной часовой копии.
     half = n_fft // 2
-    last_start = int((n_frames - 1) * hop)
-    tail = max(n_fft, last_start + n_fft - len(samples) - half)
-    padded = np.pad(samples.astype(np.float32), (half, tail), mode="constant")
+    samples = np.asarray(samples, dtype=np.float32)
+    windows = (np.lib.stride_tricks.sliding_window_view(samples, n_fft)
+               if len(samples) >= n_fft else None)
     window = np.hanning(n_fft).astype(np.float32)
 
     bank, freqs = _triangular_bank(
@@ -144,12 +160,33 @@ def analyze(
     rms = np.zeros(n_frames, dtype=np.float32)
     flux = np.zeros(n_frames, dtype=np.float32)
     prev_mag: np.ndarray | None = None
-    offsets = np.arange(n_fft, dtype=np.int64)
-
-    for begin in range(0, n_frames, _CHUNK):
+    chunk_starts = range(0, n_frames, _CHUNK)
+    for begin in tqdm(
+        chunk_starts,
+        total=(n_frames + _CHUNK - 1) // _CHUNK,
+        desc=tr("progress.audio_analysis"), unit="block", ascii=True,
+        mininterval=2.0, dynamic_ncols=True, file=sys.stderr,
+        disable=not show_progress or not sys.stderr.isatty(), leave=False,
+    ):
         end = min(begin + _CHUNK, n_frames)
         starts = (np.arange(begin, end) * hop).astype(np.int64)
-        block = padded[starts[:, None] + offsets[None, :]] * window
+        source_starts = starts - half
+        block = np.zeros((end - begin, n_fft), dtype=np.float32)
+        if windows is not None:
+            valid = ((source_starts >= 0)
+                     & (source_starts + n_fft <= len(samples)))
+            if valid.any():
+                block[valid] = windows[source_starts[valid]]
+        # Only the first/last FFT window needs explicit zero padding.
+        for row in np.flatnonzero((source_starts < 0)
+                                  | (source_starts + n_fft > len(samples))):
+            source_start = int(source_starts[row])
+            left = max(0, source_start)
+            right = min(len(samples), source_start + n_fft)
+            if right > left:
+                dst_left = left - source_start
+                block[row, dst_left:dst_left + right - left] = samples[left:right]
+        block *= window
 
         spectrum = np.abs(np.fft.rfft(block, axis=1)).astype(np.float32)
         spectrum *= 2.0 / n_fft

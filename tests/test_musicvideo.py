@@ -24,6 +24,8 @@ from musicvideo.ffmpeg import build_audio_filters
 from musicvideo.config import AudioCfg
 from musicvideo.i18n import tr
 from musicvideo.layers.text import format_time
+from musicvideo.layers.image_overlay import ImageOverlay
+from musicvideo.render import _make_gpu_renderer
 from musicvideo.presets import describe
 
 
@@ -67,6 +69,14 @@ def test_deep_merge_does_not_mutate_inputs():
     assert base == {"a": {"x": 1, "y": 2}}
 
 
+def test_old_configs_keep_compatible_renderer_defaults():
+    cfg = load_config(None, {"video": {"fps": 24}, "overlay": {"image": "logo.png"}})
+    assert cfg.video.fps == 24
+    assert cfg.renderer == "auto"
+    assert cfg.gpu.texture_cache_mb == 768
+    assert cfg.overlay.image_intro_duration == 0
+
+
 # --------------------------------------------------------------------------- #
 #  CLI
 # --------------------------------------------------------------------------- #
@@ -87,6 +97,57 @@ def test_cli_overrides_map_to_config_paths():
     assert o["visualizer"]["style"] == "bars"
     assert o["video"] == {"width": 1080, "height": 1920}
     assert o["cover"]["enabled"] is False
+
+
+def test_cli_renderer_effects_and_timed_overlay_options():
+    args = build_parser().parse_args(normalize_argv([
+        "t.mp3", "--renderer", "gpu", "--gpu-effects", "wave,glow",
+        "--overlay-intro", "10", "--overlay-outro", "5",
+        "--overlay-fade-in", "1", "--overlay-fade-out", "1",
+    ]))
+    overrides = overrides_from_args(args)
+    assert overrides["renderer"] == "gpu"
+    assert overrides["gpu"]["effects"] == ["wave", "glow"]
+    assert overrides["overlay"]["image_intro_duration"] == 10
+    assert overrides["overlay"]["image_outro_duration"] == 5
+
+
+def test_timed_overlay_alpha_has_intro_and_outro_fades():
+    cfg = load_config(None, {"overlay": {
+        "image_intro_duration": 10, "image_outro_duration": 5,
+        "image_fade_in": 1, "image_fade_out": 1,
+    }}).overlay
+    alpha = lambda t: ImageOverlay.scheduled_alpha(cfg, t, 60)
+    assert alpha(0) == 0
+    assert alpha(0.5) == pytest.approx(0.5)
+    assert alpha(1) == 1
+    assert alpha(9) == 1
+    assert alpha(9.5) == pytest.approx(0.5)
+    assert alpha(10) == 0
+    assert alpha(55) == 0
+    assert alpha(55.5) == pytest.approx(0.5)
+    assert alpha(56) == 1
+    assert alpha(59) == 1
+    assert alpha(59.5) == pytest.approx(0.5)
+    assert alpha(60) == 0
+
+
+def test_auto_renderer_falls_back_and_explicit_gpu_fails_clearly(monkeypatch):
+    from musicvideo.gpu import context
+    from musicvideo.gpu import renderer as gpu_renderer
+
+    def unavailable(*_args, **_kwargs):
+        raise context.GPUUnavailable("no standalone context")
+
+    monkeypatch.setattr(gpu_renderer, "GPUFrameRenderer", unavailable)
+    cfg = load_config(None, {"renderer": "auto"})
+    messages = []
+    assert _make_gpu_renderer(cfg, None, 1, None, messages.append) is None
+    assert "no standalone context" in messages[0]
+
+    cfg.renderer = "gpu"
+    with pytest.raises(ValueError, match="GPU renderer requested"):
+        _make_gpu_renderer(cfg, None, 1, None)
 
 
 def test_bad_size_is_rejected():

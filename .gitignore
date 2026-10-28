@@ -41,3 +41,9 @@ task.txt
 
 # Черновики статей — в репозиторий не идут
 habr/
+# CocoIndex Code (ccc)
+/.cocoindex_code/
+/input/
+/artifacts/
+
+*.log
